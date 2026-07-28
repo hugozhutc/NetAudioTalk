@@ -25,21 +25,21 @@
             android:textColor="#FFFFFF"
             android:textStyle="bold"
             android:textSize="16sp"
-            android:marginBottom="8dp"/>
+            android:layout_marginBottom="8dp"/>
 
         <Spinner
             android:id="@+id/spinnerNetCard"
             android:layout_width="match_parent"
             android:layout_height="38dp"
             android:background="#FFFFFF"
-            android:marginBottom="6dp"/>
+            android:layout_marginBottom="6dp"/>
 
         <Spinner
             android:id="@+id/spinnerProtocol"
             android:layout_width="match_parent"
             android:layout_height="38dp"
             android:background="#FFFFFF"
-            android:marginBottom="6dp"/>
+            android:layout_marginBottom="6dp"/>
 
         <EditText
             android:id="@+id/etTargetIp"
@@ -51,7 +51,7 @@
             android:background="#FFFFFF"
             android:paddingStart="8dp"
             android:inputType="text"
-            android:marginBottom="6dp"/>
+            android:layout_marginBottom="6dp"/>
 
         <EditText
             android:id="@+id/etPort"
@@ -63,14 +63,14 @@
             android:background="#FFFFFF"
             android:paddingStart="8dp"
             android:inputType="number"
-            android:marginBottom="8dp"/>
+            android:layout_marginBottom="8dp"/>
 
         <RadioGroup
             android:id="@+id/rgWorkMode"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:marginBottom="6dp">
+            android:layout_marginBottom="6dp">
             <RadioButton
                 android:id="@+id/rbPilot"
                 android:layout_width="wrap_content"
@@ -91,7 +91,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:marginBottom="8dp">
+            android:layout_marginBottom="8dp">
             <RadioButton
                 android:id="@+id/rbPtt"
                 android:layout_width="wrap_content"
