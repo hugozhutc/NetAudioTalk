@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
 import android.view.MotionEvent
 import android.view.View
@@ -36,7 +37,6 @@ class MainActivity : AppCompatActivity() {
     private var isBound = false
     private var isSystemRunning = false
     private lateinit var prefs: SharedPreferences
-
     private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
 
     private val connection = object : ServiceConnection {
@@ -44,11 +44,10 @@ class MainActivity : AppCompatActivity() {
             val binder = service as TalkService.TalkBinder
             talkService = binder.getService()
             isBound = true
-            
             talkService?.setLogOutputListener { msg ->
                 runOnUiThread { appendLog(msg) }
             }
-            appendLog("后台前台服务联通成功。")
+            appendLog("核心数据总线及前台服务联通成功。")
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -58,9 +57,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 1. 开启全局硬核防闪退拦截器
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            Looper.prepare()
+            Toast.makeText(applicationContext, "核心异常拦截: ${throwable.localizedMessage}\n请检查硬件占用", Toast.LENGTH_LONG).show()
+            Looper.loop()
+        }
+
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         super.onCreate(savedInstanceState)
         
+        // 2. 悬浮窗动态权限首道安全屏障
+        if (!Settings.canDrawOverlays(this)) {
+            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+            startActivity(intent)
+            Toast.makeText(this, "请先授予悬浮窗权限以允许控制台常驻后台", Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
+
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         
@@ -72,9 +87,13 @@ class MainActivity : AppCompatActivity() {
         setupUIListeners()
         checkAndRequestPermissions()
 
-        val intent = Intent(this, TalkService::class.java)
-        startService(intent)
-        bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        // 3. 安全连接后台通信服务
+        try {
+            val intent = Intent(this, TalkService::class.java)
+            bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        } catch (e: Exception) {
+            appendLog("通信服务链路绑定异常: ${e.message}")
+        }
     }
 
     private fun initNetworkCards() {
@@ -153,12 +172,21 @@ class MainActivity : AppCompatActivity() {
         val workMode = if (binding.rbPilot.isChecked) WorkMode.TRANSMIT else WorkMode.LISTEN_ONLY
         val talkMode = if (binding.rbContinuous.isChecked) TalkMode.CONTINUOUS else TalkMode.PTT
 
-        talkService?.connectSystem(workMode, proto, selectedCard.ip, targetIp, port, talkMode)
-        
-        isSystemRunning = true
-        binding.btnConnect.text = "断开系统"
-        toggleUIConfigElements(false)
-        appendLog("系统启动成功，核心链路已进入工作状态。")
+        try {
+            val intent = Intent(this, TalkService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+            talkService?.connectSystem(workMode, proto, selectedCard.ip, targetIp, port, talkMode)
+            isSystemRunning = true
+            binding.btnConnect.text = "断开系统"
+            toggleUIConfigElements(false)
+            appendLog("系统接入成功，物理网络接口: ${selectedCard.name} [${selectedCard.ip}]")
+        } catch (e: Exception) {
+            appendLog("服务提升至前台失败: ${e.message}")
+        }
     }
 
     private fun stopSystemAction() {
@@ -170,7 +198,7 @@ class MainActivity : AppCompatActivity() {
             binding.btnTalkLarge.isEnabled = true
             binding.btnTalkLarge.text = "按住 对讲 (PTT)"
         }
-        appendLog("系统已主动安全断开。")
+        appendLog("网络链路已主动安全断开。")
     }
 
     private fun toggleUIConfigElements(enabled: Boolean) {
@@ -192,7 +220,7 @@ class MainActivity : AppCompatActivity() {
             putBoolean("is_pilot", binding.rbPilot.isChecked)
             apply()
         }
-        Toast.makeText(this, "当前参数本地持久化保存成功", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "专网配置持久化保存成功", Toast.LENGTH_SHORT).show()
     }
 
     private fun loadPersistedParams() {
@@ -217,15 +245,9 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-        
         val needed = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, needed.toTypedArray(), 200)
-        }
-
-        if (!Settings.canDrawOverlays(this)) {
-            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-            startActivity(intent)
         }
     }
 
