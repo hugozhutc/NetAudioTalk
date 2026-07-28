@@ -15,11 +15,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- 核心修正：android:icon 直接引用系统自带的默认机器人图标，彻底移除对本地 mipmap 文件的依赖 -->
     <application
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@android:drawable/sym_def_app_icon"
         android:label="NetAudioTalk"
-        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.NoActionBar">
 
@@ -35,7 +35,7 @@
             </intent-filter>
         </activity>
 
-        <!-- 核心通信与前台音频服务：显式指定类型防闪退 -->
+        <!-- 核心通信与前台音频服务 -->
         <service
             android:name=".service.TalkService"
             android:enabled="true"
