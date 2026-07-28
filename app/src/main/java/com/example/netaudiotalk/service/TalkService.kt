@@ -32,15 +32,15 @@ class TalkService : Service() {
     private var rxThread: Thread? = null
     private var txThread: Thread? = null
     
-    // Android 硬件锁：强行放行 Wi-Fi 组播数据包
+    // Android 硬件锁：放行 Wi-Fi 组播数据包
     private var multicastLock: WifiManager.MulticastLock? = null
 
-    // PTT 模式参数缓存区
+    // 参数缓存区
     private var currentLocalIp: String = ""
     private var currentTargetIp: String = ""
     private var currentPort: Int = 0
 
-    // 音频组件参数 (16kHz, 单声道, 16位PCM)
+    // 音频核心参数 (16kHz, 单声道, 16位PCM)
     private val SAMPLE_RATE = 16000
     private val CHANNEL_IN = AudioFormat.CHANNEL_IN_MONO
     private val CHANNEL_OUT = AudioFormat.CHANNEL_OUT_MONO
@@ -82,12 +82,12 @@ class TalkService : Service() {
         if (isSystemRunning) return
         isSystemRunning = true
 
-        // 缓存当前连接参数，供 PTT 动态发射线程实时提取
-        this.currentLocalIp = localIp
-        this.currentTargetIp = targetIp
+        // 强力缓存当前连接参数
+        this.currentLocalIp = localIp.trim()
+        this.currentTargetIp = targetIp.trim()
         this.currentPort = port
 
-        // 1. 激活 Android 组播锁，打通同 Wi-Fi 链路的网卡驱动屏蔽
+        // 1. 激活 Android 组播锁
         try {
             val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
             multicastLock = wifiManager.createMulticastLock("netaudiotalk_mcast_lock").apply {
@@ -115,22 +115,26 @@ class TalkService : Service() {
             postLog("声卡播放初始化失败: ${e.message}")
         }
 
-        // 3. 建立支持指定网卡的网络接收套接字
+        // 3. 建立并配置支持网卡绑定的网络接收套接字
         try {
-            val localAddr = InetAddress.getByName(localIp)
-            val groupAddr = InetAddress.getByName(targetIp)
+            val localAddr = InetAddress.getByName(currentLocalIp)
+            val groupAddr = InetAddress.getByName(currentTargetIp)
 
             multicastSocket = MulticastSocket(port).apply {
+                // 绑定到特定的网络接口，防止多网卡时流量走错物理链路
                 val networkInterface = NetworkInterface.getByInetAddress(localAddr)
                 if (networkInterface != null) {
                     setNetworkInterface(networkInterface)
                 }
                 
+                // 【保险一】：关闭底层 Linux 组播回环，禁止自己发出的包回弹到自己的接收队列
+                loopbackMode = false 
+
                 if (groupAddr.isMCLinkLocal || groupAddr.isMCNodeLocal || groupAddr.isMCOrgLocal || groupAddr.isMCSiteLocal || groupAddr.isMCGlobal) {
                     joinGroup(groupAddr)
-                    postLog("网络套接字成功加入组播组: $targetIp:$port")
+                    postLog("网络套接字成功加入组播组: $currentTargetIp:$port (已禁用底层回环)")
                 } else {
-                    postLog("当前为单播/广播监听模式: $targetIp:$port")
+                    postLog("当前为单播/广播监听模式: $currentTargetIp:$port")
                 }
             }
         } catch (e: Exception) {
@@ -140,7 +144,7 @@ class TalkService : Service() {
         // 4. 开启异步接收与播放线程
         startReceiverThread()
 
-        // 5. 判断话务模式
+        // 5. 调度话务模式
         if (workMode == WorkMode.TRANSMIT && talkMode == TalkMode.CONTINUOUS) {
             isPttTransmitting = true
             startTransmitterThread(currentLocalIp, currentTargetIp, currentPort)
@@ -157,7 +161,13 @@ class TalkService : Service() {
                     val packet = DatagramPacket(buffer, buffer.size)
                     multicastSocket?.receive(packet)
 
-                    // 将网络接收到的原始 PCM 数据直接写入声卡播放
+                    // 【保险二】：过滤来自本机的幻影包（防止部分定制硬件或热点强行空中转发自己发过的包）
+                    val senderIp = packet.address.hostAddress
+                    if (senderIp == currentLocalIp) {
+                        continue // 拒绝播放自己的声音，直接丢弃
+                    }
+
+                    // 写入声卡播放别人的声音
                     audioTrack?.write(packet.data, packet.offset, packet.length)
                 } catch (e: Exception) {
                     if (!isSystemRunning) break
@@ -168,7 +178,7 @@ class TalkService : Service() {
         }.apply { start() }
     }
 
-    // PTT 按住事件触发：动态拉起录音并发包
+    // PTT 模式按下：触发动态采集与发射
     fun startPttTransmitting() {
         if (!isSystemRunning || isPttTransmitting) return
         isPttTransmitting = true
@@ -177,7 +187,7 @@ class TalkService : Service() {
         startTransmitterThread(currentLocalIp, currentTargetIp, currentPort)
     }
 
-    // PTT 松开事件触发：迅速断开麦克风释放资源
+    // PTT 模式松开：瞬间释放麦克风并销毁线程
     fun stopPttTransmitting() {
         if (!isPttTransmitting) return
         isPttTransmitting = false
@@ -194,7 +204,7 @@ class TalkService : Service() {
         txThread = Thread {
             try {
                 val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_IN, AUDIO_FORMAT)
-                // 推荐优先使用 VOICE_COMMUNICATION 以获得系统自带的回音消除和噪声抑制
+                // 采用 VOICE_COMMUNICATION 以获得更优的硬件AEC(回音消除)和NS(降噪)
                 audioRecord = AudioRecord(
                     MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                     SAMPLE_RATE,
@@ -204,7 +214,7 @@ class TalkService : Service() {
                 )
 
                 if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                    postLog("错误：麦克风初始化失败，请确认权限或硬件未被抢占！")
+                    postLog("错误：麦克风初始化失败，请确认硬件被抢占或录音权限被拒绝！")
                     isPttTransmitting = false
                     return@Thread
                 }
@@ -213,7 +223,7 @@ class TalkService : Service() {
                 val audioBuffer = ByteArray(BUFFER_SIZE)
                 val targetAddress = InetAddress.getByName(targetIp)
 
-                postLog("==> 音频发射线程进入就绪广播状态")
+                postLog("==> 音频发射线程进入就绪状态，目标地址: $targetIp:$port")
                 while (isSystemRunning && isPttTransmitting) {
                     val readBytes = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
                     if (readBytes > 0) {
@@ -233,25 +243,25 @@ class TalkService : Service() {
         isSystemRunning = false
         isPttTransmitting = false
 
-        // 关闭套接字
+        // 关闭网络套接字
         try { multicastSocket?.close() } catch (e: Exception) {}
         multicastSocket = null
 
-        // 销毁采集
+        // 彻底销毁录音
         try {
             audioRecord?.stop()
             audioRecord?.release()
         } catch (e: Exception) {}
         audioRecord = null
 
-        // 销毁播放
+        // 彻底销毁播放
         try {
             audioTrack?.stop()
             audioTrack?.release()
         } catch (e: Exception) {}
         audioTrack = null
 
-        // 回归硬件锁状态
+        // 回归并释放 Android 硬件锁状态
         if (multicastLock?.isHeld == true) {
             multicastLock?.release()
         }
