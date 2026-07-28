@@ -203,7 +203,7 @@ class TalkService : Service() {
                     }
 
                     rxPackets.incrementAndGet()
-                    if (rxPackets.get() % 5 == 0L) { // 提高刷新频率，让数据流看起来像仪表盘一样在跳动
+                    if (rxPackets.get() % 5 == 0L) { // 提高刷新频率，数据流像仪表盘一样跳动
                         mainHandler.post { refreshFloatingUi() }
                     }
 
@@ -283,10 +283,10 @@ class TalkService : Service() {
 
         val context = applicationContext
         
-        // 1. 【高大上重构】：外层战术防眩光半透明面板 (极客灰 + 质感大圆角)
+        // 1. 外层战术防眩光半透明面板 (深灰碳素 + 24dp 质感大圆角)
         floatingView = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            padding = 0 // 内部组件采用更紧凑的对齐
+            setPadding(0, 0, 0, 0) // 已修复：改用 Android 标准多入参函数
             val bg = GradientDrawable().apply {
                 setColor(Color.parseColor("#EE1A1C1F")) // 深碳素灰背景
                 cornerRadius = 24f  // 科技感圆角
@@ -349,7 +349,7 @@ class TalkService : Service() {
         dashboardLayout.addView(tvTrafficRx)
         dashboardLayout.addView(tvTrafficTx)
 
-        // 4. 【战术对讲 PTT 物理级交互按钮】：采用双层高光切换特效
+        // 4. 【战术对讲 PTT 交互按钮】：采用双层高光切换特效
         val pttDefaultBg = GradientDrawable().apply {
             setColor(Color.parseColor("#FF0D6EFD")) // 电子脉冲蓝
             cornerRadius = 16f
