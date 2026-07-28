@@ -6,17 +6,26 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.PixelFormat
 import android.media.*
 import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
+import android.view.Gravity
+import android.view.WindowManager
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import com.example.netaudiotalk.enums.CommProtocol
 import com.example.netaudiotalk.enums.TalkMode
 import com.example.netaudiotalk.enums.WorkMode
 import java.net.*
+import java.util.concurrent.atomic.AtomicLong
 
 class TalkService : Service() {
 
@@ -39,6 +48,7 @@ class TalkService : Service() {
     private var currentLocalIp: String = ""
     private var currentTargetIp: String = ""
     private var currentPort: Int = 0
+    private var currentTalkMode: TalkMode = TalkMode.PTT
 
     // 音频核心参数 (16kHz, 单声道, 16位PCM)
     private val SAMPLE_RATE = 16000
@@ -49,6 +59,17 @@ class TalkService : Service() {
 
     private var audioRecord: AudioRecord? = null
     private var audioTrack: AudioTrack? = null
+
+    // ================= 悬浮窗监控组件与流量统计 =================
+    private var windowManager: WindowManager? = null
+    private var floatingView: LinearLayout? = null
+    private var tvStatus: TextView? = null
+    private var tvTraffic: TextView? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    
+    // 使用原子类确保多线程并发累加包数量时的线程安全
+    private val rxPackets = AtomicLong(0)
+    private val txPackets = AtomicLong(0)
 
     inner class TalkBinder : Binder() {
         fun getService(): TalkService = this@TalkService
@@ -67,6 +88,7 @@ class TalkService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         startForegroundProvider()
     }
 
@@ -86,8 +108,16 @@ class TalkService : Service() {
         this.currentLocalIp = localIp.trim()
         this.currentTargetIp = targetIp.trim()
         this.currentPort = port
+        this.currentTalkMode = talkMode
+        
+        // 重置网络包统计器
+        rxPackets.set(0)
+        txPackets.set(0)
 
-        // 1. 激活 Android 组播锁
+        // 1. 初始化并直接挂载网络监控悬浮窗
+        mainHandler.post { initAndShowFloatingWindow() }
+
+        // 2. 激活 Android 组播锁
         try {
             val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
             multicastLock = wifiManager.createMulticastLock("netaudiotalk_mcast_lock").apply {
@@ -99,7 +129,7 @@ class TalkService : Service() {
             postLog("组播锁申请异常: ${e.message}")
         }
 
-        // 2. 初始化音频输出硬件 (播放)
+        // 3. 初始化音频输出硬件 (播放)
         try {
             val minTrackBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_OUT, AUDIO_FORMAT)
             audioTrack = AudioTrack(
@@ -115,7 +145,7 @@ class TalkService : Service() {
             postLog("声卡播放初始化失败: ${e.message}")
         }
 
-        // 3. 建立并配置支持网卡绑定的网络接收套接字
+        // 4. 建立并配置支持网卡绑定的网络接收套接字
         try {
             val localAddr = InetAddress.getByName(currentLocalIp)
             val groupAddr = InetAddress.getByName(currentTargetIp)
@@ -141,16 +171,18 @@ class TalkService : Service() {
             postLog("网络套接字建立失败: ${e.message}")
         }
 
-        // 4. 开启异步接收与播放线程
+        // 5. 开启异步接收与播放线程
         startReceiverThread()
 
-        // 5. 调度话务模式
+        // 6. 调度话务模式
         if (workMode == WorkMode.TRANSMIT && talkMode == TalkMode.CONTINUOUS) {
             isPttTransmitting = true
             startTransmitterThread(currentLocalIp, currentTargetIp, currentPort)
         } else if (workMode == WorkMode.TRANSMIT && talkMode == TalkMode.PTT) {
             postLog("核心链路联通。当前为 [按住对讲 (PTT)] 模式，等待按键调度...")
         }
+        
+        mainHandler.post { refreshFloatingUi() }
     }
 
     private fun startReceiverThread() {
@@ -165,6 +197,12 @@ class TalkService : Service() {
                     val senderIp = packet.address.hostAddress
                     if (senderIp == currentLocalIp) {
                         continue // 拒绝播放自己的声音，直接丢弃
+                    }
+
+                    // 增加接收包统计，每隔 10 个包刷新一次 UI，避免频繁刷新造成主线程卡顿
+                    rxPackets.incrementAndGet()
+                    if (rxPackets.get() % 10 == 0L) {
+                        mainHandler.post { refreshFloatingUi() }
                     }
 
                     // 写入声卡播放别人的声音
@@ -184,6 +222,7 @@ class TalkService : Service() {
         isPttTransmitting = true
         
         postLog("PTT 动作响应：开始加载麦克风并打通网络发射链路...")
+        mainHandler.post { refreshFloatingUi() }
         startTransmitterThread(currentLocalIp, currentTargetIp, currentPort)
     }
 
@@ -198,6 +237,7 @@ class TalkService : Service() {
             audioRecord = null
         } catch (e: Exception) {}
         postLog("PTT 动作释放：已终止语音数据发射。")
+        mainHandler.post { refreshFloatingUi() }
     }
 
     private fun startTransmitterThread(localIp: String, targetIp: String, port: Int) {
@@ -229,6 +269,12 @@ class TalkService : Service() {
                     if (readBytes > 0) {
                         val packet = DatagramPacket(audioBuffer, readBytes, targetAddress, port)
                         multicastSocket?.send(packet)
+                        
+                        // 增加发送包统计并定时刷新 UI
+                        txPackets.incrementAndGet()
+                        if (txPackets.get() % 10 == 0L) {
+                            mainHandler.post { refreshFloatingUi() }
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -239,9 +285,102 @@ class TalkService : Service() {
         }.apply { start() }
     }
 
+    // ================= 纯 Kotlin 代码动态画出悬浮窗 =================
+    private fun initAndShowFloatingWindow() {
+        if (floatingView != null) return
+
+        val context = applicationContext
+        
+        // 1. 创建半透明深色容器底板
+        floatingView = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#BB111111")) // 75% 透明度的石墨黑背景
+            setPadding(24, 16, 24, 16)
+        }
+
+        // 2. 创建状态文本
+        tvStatus = TextView(context).apply {
+            setTextColor(Color.GREEN)
+            textSize = 13f
+            text = "专网总线: 已联通"
+        }
+
+        // 3. 创建流量包监视文本
+        tvTraffic = TextView(context).apply {
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            text = "接收: 0 包\n发送: 0 包"
+            setLineSpacing(4f, 1f)
+        }
+
+        floatingView?.addView(tvStatus)
+        floatingView?.addView(tvTraffic)
+
+        // 4. 配置防阻碍点击的悬浮窗窗口参数
+        val layoutParams = WindowManager.LayoutParams().apply {
+            type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            }
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            format = PixelFormat.TRANSLUCENT
+            width = WindowManager.LayoutParams.WRAP_CONTENT
+            height = WindowManager.LayoutParams.WRAP_CONTENT
+            gravity = Gravity.TOP or Gravity.END // 贴在屏幕右上角
+            x = 40
+            y = 40
+        }
+
+        try {
+            windowManager?.addView(floatingView, layoutParams)
+        } catch (e: Exception) {
+            Log.e("TalkService", "挂载监控悬浮窗失败，请确认系统层悬浮窗授权: ${e.message}")
+        }
+    }
+
+    // 刷新监控面板上的文字内容与颜色提示
+    private fun refreshFloatingUi() {
+        if (!isSystemRunning) {
+            tvStatus?.text = "专网总线: 已断开"
+            tvStatus?.setTextColor(Color.RED)
+            return
+        }
+
+        if (isPttTransmitting) {
+            tvStatus?.text = "话务状态: 正在发射声音..."
+            tvStatus?.setTextColor(Color.RED) // 发射中显示警示红
+        } else {
+            tvStatus?.text = "话务状态: 监听中 (${if(currentTalkMode == TalkMode.PTT) "PTT" else "常开"})"
+            tvStatus?.setTextColor(Color.GREEN) // 监听状态显示安全绿
+        }
+
+        tvTraffic?.text = "接收数据: ${rxPackets.get()} 包\n发送数据: ${txPackets.get()} 包"
+    }
+
+    private fun removeFloatingWindow() {
+        floatingView?.let {
+            try {
+                windowManager?.removeView(it)
+            } catch (e: Exception) {}
+            floatingView = null
+            tvStatus = null
+            tvTraffic = null
+        }
+    }
+
     fun disconnectSystem() {
         isSystemRunning = false
         isPttTransmitting = false
+
+        // 销毁并移除屏幕悬浮窗
+        mainHandler.post { 
+            refreshFloatingUi()
+            removeFloatingWindow()
+        }
 
         // 关闭网络套接字
         try { multicastSocket?.close() } catch (e: Exception) {}
@@ -284,7 +423,17 @@ class TalkService : Service() {
             .setSmallIcon(android.R.drawable.sym_def_app_icon)
             .build()
 
-        startForeground(1010, notification)
+        // 依据 Android 高版本规定，拉起前台服务时必须严格传入与 Manifest 契合的混合类型
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                1010, 
+                notification, 
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or 
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            )
+        } else {
+            startForeground(1010, notification)
+        }
     }
 
     override fun onDestroy() {
