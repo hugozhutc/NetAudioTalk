@@ -4,7 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
-importimport android.content.Context
+import android.content.Context
 import android.content.Intent
 import android.media.*
 import android.net.wifi.WifiManager
@@ -19,6 +19,7 @@ import com.example.netaudiotalk.enums.WorkMode
 import java.net.*
 
 class TalkService : Service() {
+// ... 后面的代码完全保持不变 ...
 
     private val binder = TalkBinder()
     private var logListener: ((String) -> Unit)? = null
