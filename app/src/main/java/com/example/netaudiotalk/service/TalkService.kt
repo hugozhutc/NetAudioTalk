@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.media.*
 import android.net.wifi.WifiManager
 import android.os.Binder
@@ -67,9 +68,13 @@ class TalkService : Service() {
     // ================= 悬浮窗监控与PTT交互组件 =================
     private var windowManager: WindowManager? = null
     private var floatingView: LinearLayout? = null
-    private var tvStatus: TextView? = null
-    private var tvTraffic: TextView? = null
-    private var btnPttTouch: Button? = null // 悬浮窗内的交互式 PTT 按钮
+    
+    // 重新设计的UI组件
+    private var viewStatusDot: View? = null     // 雷达呼吸状态指示灯
+    private var tvStatusTitle: TextView? = null // 主状态文本
+    private var tvTrafficRx: TextView? = null   // 独立高光下行数据流
+    private var tvTrafficTx: TextView? = null   // 独立高光上行数据流
+    private var btnPttTouch: Button? = null    // 战术级交互式 PTT 按钮
     
     private val mainHandler = Handler(Looper.getMainLooper())
     private val rxPackets = AtomicLong(0)
@@ -198,7 +203,7 @@ class TalkService : Service() {
                     }
 
                     rxPackets.incrementAndGet()
-                    if (rxPackets.get() % 10 == 0L) {
+                    if (rxPackets.get() % 5 == 0L) { // 提高刷新频率，让数据流看起来像仪表盘一样在跳动
                         mainHandler.post { refreshFloatingUi() }
                     }
 
@@ -260,7 +265,7 @@ class TalkService : Service() {
                         multicastSocket?.send(packet)
                         
                         txPackets.incrementAndGet()
-                        if (txPackets.get() % 10 == 0L) {
+                        if (txPackets.get() % 5 == 0L) {
                             mainHandler.post { refreshFloatingUi() }
                         }
                     }
@@ -271,58 +276,120 @@ class TalkService : Service() {
         }.apply { start() }
     }
 
-    // ================= 创建带触摸响应的系统全局 PTT 悬浮窗 =================
-    @SuppressLint("ClickableViewAccessibility")
+    // ================= 创建“战术硬核科技风”全局 PTT 悬浮窗 =================
+    @SuppressLint("ClickableViewAccessibility", "SetTextI18n")
     private fun initAndShowFloatingWindow() {
         if (floatingView != null) return
 
         val context = applicationContext
         
-        // 1. 外层面板容器
+        // 1. 【高大上重构】：外层战术防眩光半透明面板 (极客灰 + 质感大圆角)
         floatingView = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#DD1A1A1A")) // 稍深的半透明板
-            setPadding(30, 20, 30, 20)
+            padding = 0 // 内部组件采用更紧凑的对齐
+            val bg = GradientDrawable().apply {
+                setColor(Color.parseColor("#EE1A1C1F")) // 深碳素灰背景
+                cornerRadius = 24f  // 科技感圆角
+                setStroke(2, Color.parseColor("#44A0A5B5")) // 极细半透明钛金边框
+            }
+            background = bg
         }
 
-        // 2. 状态与流量文本
-        tvStatus = TextView(context).apply {
-            setTextColor(Color.GREEN)
-            textSize = 13f
-            text = "专网总线: 已联通"
-            gravity = Gravity.CENTER
+        // 2. 状态栏容器 (水平对齐：雷达呼吸灯 + 标题)
+        val headerLayout = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(25, 20, 25, 12)
+        }
+
+        // 2a. 雷达指示灯圆点
+        viewStatusDot = View(context).apply {
+            val dotParams = LinearLayout.LayoutParams(16, 16).apply {
+                rightMargin = 15
+            }
+            layoutParams = dotParams
+            val dotDrawable = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#FF00FF66")) // 默认军工荧光绿
+            }
+            background = dotDrawable
+        }
+
+        // 2b. 核心状态文本
+        tvStatusTitle = TextView(context).apply {
+            setTextColor(Color.parseColor("#FFEEEEEE"))
+            textSize = 12f
+            text = "LINK READY"
+            setPadding(0, 0, 0, 0)
+        }
+        headerLayout.addView(viewStatusDot)
+        headerLayout.addView(tvStatusTitle)
+
+        // 3. 数据仪表盘区 (并排展示，模拟飞行控制台)
+        val dashboardLayout = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(25, 0, 25, 20)
+            weightSum = 2.0f
+        }
+
+        tvTrafficRx = TextView(context).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
+            setTextColor(Color.parseColor("#FF00D6FF")) // 青蓝色代表下行接收
+            textSize = 10f
+            text = "RX: 0 Pkts"
+        }
+
+        tvTrafficTx = TextView(context).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
+            setTextColor(Color.parseColor("#FFFFB900")) // 琥珀橙代表上行发射
+            textSize = 10f
+            text = "TX: 0 Pkts"
+            gravity = Gravity.END
+        }
+        dashboardLayout.addView(tvTrafficRx)
+        dashboardLayout.addView(tvTrafficTx)
+
+        // 4. 【战术对讲 PTT 物理级交互按钮】：采用双层高光切换特效
+        val pttDefaultBg = GradientDrawable().apply {
+            setColor(Color.parseColor("#FF0D6EFD")) // 电子脉冲蓝
+            cornerRadius = 16f
+            setStroke(1, Color.parseColor("#88FFFFFF"))
         }
         
-        tvTraffic = TextView(context).apply {
-            setTextColor(Color.LTGRAY)
-            textSize = 11f
-            text = "Rx: 0 包 | Tx: 0 包"
-            setPadding(0, 5, 0, 15)
-            gravity = Gravity.CENTER
+        val pttActiveBg = GradientDrawable().apply {
+            setColor(Color.parseColor("#DDC53939")) // 战术警示红
+            cornerRadius = 16f
+            setStroke(3, Color.parseColor("#FFFF0033")) // 强光边缘
         }
 
-        // 3. 【核心交互改动】：动态画一个全局 PTT 实体按钮
         btnPttTouch = Button(context).apply {
-            text = "按住 对讲"
-            setBackgroundColor(Color.parseColor("#FF0055CC")) // 默认科技蓝
+            text = "▲ PTT TRANSMIT"
+            background = pttDefaultBg
             setTextColor(Color.WHITE)
-            textSize = 14f
+            textSize = 13f
+            includeFontPadding = false
             
-            // 绑定触摸事件，完美复刻主界面的 PTT 操作逻辑
+            val btnParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 
+                88 // 锁定战术厚度，单手大拇指极易盲操
+            ).apply {
+                setMargins(20, 0, 20, 20)
+            }
+            layoutParams = btnParams
+
+            // 深度触控交互映射
             setOnTouchListener { _, event ->
                 if (!isSystemRunning || currentTalkMode != TalkMode.PTT) return@setOnTouchListener false
                 
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
-                        // 按下：按钮变红，触发录音与网络发射
-                        setBackgroundColor(Color.parseColor("#DDBB0000"))
-                        text = "正在 说话..."
+                        background = pttActiveBg
+                        text = "● BROADCASTING..."
                         startPttTransmitting()
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        // 抬起或滑出：恢复蓝色，关闭录音与网络发射
-                        setBackgroundColor(Color.parseColor("#FF0055CC"))
-                        text = "按住 对讲"
+                        background = pttDefaultBg
+                        text = "▲ PTT TRANSMIT"
                         stopPttTransmitting()
                     }
                 }
@@ -330,11 +397,12 @@ class TalkService : Service() {
             }
         }
 
-        floatingView?.addView(tvStatus)
-        floatingView?.addView(tvTraffic)
+        // 按序注入全局骨架
+        floatingView?.addView(headerLayout)
+        floatingView?.addView(dashboardLayout)
         floatingView?.addView(btnPttTouch)
 
-        // 4. 修改 LayoutParams 标志：取消 FLAG_NOT_TOUCHABLE 锁，使悬浮窗内的按钮能感知手指按下抬起
+        // 5. 跨应用悬浮图层参数布局
         val layoutParams = WindowManager.LayoutParams().apply {
             type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -343,30 +411,31 @@ class TalkService : Service() {
                 WindowManager.LayoutParams.TYPE_PHONE
             }
             
-            // 【关键】：这里移除了阻断点击的 flag，保留 NOT_FOCUSABLE 确保不阻挡输入法，但允许处理触摸
             flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                     
             format = PixelFormat.TRANSLUCENT
-            width = 320 // 给定一个固定宽度，使按钮在桌面上更加美观紧凑
+            width = 360 // 完美适配宽比例手持遥控器边缘
             height = WindowManager.LayoutParams.WRAP_CONTENT
-            gravity = Gravity.TOP or Gravity.END // 默认钉在手持机屏幕右上角
-            x = 50
-            y = 120 // 往下挪一点，防止挡住系统状态栏的时间与电量
+            gravity = Gravity.TOP or Gravity.END
+            x = 40
+            y = 150 // 优雅避让原生状态栏
         }
 
         try {
             windowManager?.addView(floatingView, layoutParams)
         } catch (e: Exception) {
-            Log.e("TalkService", "挂载交互式对讲悬浮窗失败: ${e.message}")
+            Log.e("TalkService", "UI重构挂载异常: ${e.message}")
         }
     }
 
+    @SuppressLint("SetTextI18n")
     private fun refreshFloatingUi() {
         if (!isSystemRunning) {
-            tvStatus?.text = "专网总线: 已断开"
-            tvStatus?.setTextColor(Color.RED)
+            tvStatusTitle?.text = "BUS OFFLINE"
+            tvStatusTitle?.setTextColor(Color.parseColor("#FFAAAAAA"))
+            (viewStatusDot?.background as? GradientDrawable)?.setColor(Color.GRAY)
             btnPttTouch?.visibility = View.GONE
             return
         }
@@ -374,14 +443,20 @@ class TalkService : Service() {
         btnPttTouch?.visibility = if (currentTalkMode == TalkMode.PTT) View.VISIBLE else View.GONE
 
         if (isPttTransmitting) {
-            tvStatus?.text = "话务状态: 正在发射声音..."
-            tvStatus?.setTextColor(Color.RED)
+            tvStatusTitle?.text = "TX ACTIVE"
+            tvStatusTitle?.setTextColor(Color.parseColor("#FFFF3B30"))
+            // 发射时指示灯变为深警示红
+            (viewStatusDot?.background as? GradientDrawable)?.setColor(Color.parseColor("#FFFF3B30"))
         } else {
-            tvStatus?.text = "话务状态: 监听中 (${if(currentTalkMode == TalkMode.PTT) "PTT" else "常开"})"
-            tvStatus?.setTextColor(Color.GREEN)
+            val modeSuffix = if (currentTalkMode == TalkMode.PTT) "PTT" else "OPEN"
+            tvStatusTitle?.text = "LISTENING [$modeSuffix]"
+            tvStatusTitle?.setTextColor(Color.parseColor("#FF00FF66"))
+            // 监听中恢复军工荧光绿
+            (viewStatusDot?.background as? GradientDrawable)?.setColor(Color.parseColor("#FF00FF66"))
         }
 
-        tvTraffic?.text = "接收: ${rxPackets.get()} 包 | 发送: ${txPackets.get()} 包"
+        tvTrafficRx?.text = "RX: ${rxPackets.get()} Pkts"
+        tvTrafficTx?.text = "TX: ${txPackets.get()} Pkts"
     }
 
     private fun removeFloatingWindow() {
@@ -390,8 +465,10 @@ class TalkService : Service() {
                 windowManager?.removeView(it)
             } catch (e: Exception) {}
             floatingView = null
-            tvStatus = null
-            tvTraffic = null
+            viewStatusDot = null
+            tvStatusTitle = null
+            tvTrafficRx = null
+            tvTrafficTx = null
             btnPttTouch = null
         }
     }
