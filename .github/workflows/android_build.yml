@@ -18,14 +18,14 @@ jobs:
         distribution: 'temurin'
         cache: gradle
         
-    # 修改这里：显式指定 gradle-version，这样云端就会自己下载配套环境，不再强求项目根目录有 gradlew 文件
+    # 直接在云端托管 Gradle 环境，不依赖仓库本地代码
     - name: Setup and Run Gradle
       uses: gradle/actions/setup-gradle@v3
       with:
         gradle-version: '7.5'
         arguments: assembleDebug
         
-    # 当编译成功后，负责把 app-debug.apk 提取出来供你下载
+    # 编译完成后的 APK 归档上传组件
     - name: Upload Output APK
       uses: actions/upload-artifact@v4
       with:
