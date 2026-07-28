@@ -8,6 +8,10 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     
+    <!-- 核心修正：必须声明更改Wi-Fi组播状态的权限，否则代码中强开组播锁会直接拒绝闪退 -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
     <!-- 悬浮窗与前台保活权限 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -15,7 +19,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- 核心修正：android:icon 直接引用系统自带的默认机器人图标，彻底移除对本地 mipmap 文件的依赖 -->
     <application
         android:allowBackup="true"
         android:icon="@android:drawable/sym_def_app_icon"
