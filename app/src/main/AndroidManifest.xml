@@ -1,35 +1,46 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.netaudiotalk">
 
-    <!-- 网络、硬件采集与前台保活悬浮窗权限 -->
+    <!-- 基础网络与硬件权限 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    
+    <!-- 悬浮窗与前台保活权限 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
-        android:allowBackup="false"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
         android:label="NetAudioTalk"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.NoActionBar">
-        
-        <!-- 强制锁定横屏 landscape -->
+
+        <!-- 强制横屏的主控台 Activity -->
         <activity
-            android:name="com.example.netaudiotalk.ui.MainActivity"
+            android:name=".ui.MainActivity"
             android:exported="true"
-            android:screenOrientation="landscape"
-            android:configChanges="orientation|screenSize|keyboardHidden">
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:screenOrientation="landscape">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
-        <!-- 后台音频保活服务 -->
+        <!-- 核心通信与前台音频服务：显式指定类型防闪退 -->
         <service
-            android:name="com.example.netaudiotalk.service.TalkService"
+            android:name=".service.TalkService"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="microphone|mediaPlayback" />
+
     </application>
 </manifest>
